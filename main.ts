@@ -1,16 +1,15 @@
 // DenoProxy 主服务入口，Deno 版本
-import { Application, Router, send } from "https://deno.land/x/oak/mod.ts";
+import { Application, Router, send } from "https://deno.land/x/oak@v12.6.1/mod.ts";
 import { join, dirname, fromFileUrl } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const __dirname = dirname(fromFileUrl(import.meta.url));
 const CONFIG_FILE = join(__dirname, "index_config.json");
 const PUBLIC_DIR = join(__dirname, "public");
-const CONFIG_HTML_FILE = join(PUBLIC_DIR, "list.html");
 const INDEX_FILE = join(PUBLIC_DIR, "index.html");
 const FAVICON_PATH = join(PUBLIC_DIR, "favicon.ico");
 const CONFIG_ENDPOINT = "/list";
 
-// ================== 工具函数与缓存实现合并 ==================
+// ================== 工具函数与缓存实现 ==================
 function calculateUptime(establishTimeStr?: string): string {
   if (!establishTimeStr) return "未设置建站时间";
   const [year, month, day, hour, minute] = establishTimeStr.split('/').map(Number);
@@ -26,11 +25,13 @@ function calculateUptime(establishTimeStr?: string): string {
   uptime += `${minutes}分钟`;
   return uptime;
 }
+
 function formatEstablishTime(timeStr?: string): string {
   if (!timeStr) return "未设置";
   const [year, month, day, hour, minute] = timeStr.split('/').map(Number);
   return `${year}年${month}月${day}日${hour}时${minute}分`;
 }
+
 async function loadConfig(configPath: string, fallback: any) {
   try {
     const configText = await Deno.readTextFile(configPath);
@@ -40,15 +41,17 @@ async function loadConfig(configPath: string, fallback: any) {
     return fallback;
   }
 }
-async function loadStatics(paths: { index: string, configHtml: string, favicon: string }) {
+
+async function loadStatics(paths: { index: string, favicon: string }) {
   return Promise.all([
     Deno.readTextFile(paths.index).catch(() => null),
-    Deno.readTextFile(paths.configHtml).catch(() => null),
     Deno.readFile(paths.favicon).catch(() => null),
   ]);
 }
+
 const LOG_BUFFER_SIZE = 2000;
 const logBuffer: string[] = [];
+
 function colorize(level: string, msg: string) {
   const RESET = "\x1b[0m";
   const COLORS: Record<string, string> = {
@@ -58,6 +61,7 @@ function colorize(level: string, msg: string) {
   };
   return `${COLORS[level] || ''}[${level}]${RESET} ${msg}`;
 }
+
 function pushLog(msg: string, level: 'INFO' | 'WARN' | 'ERROR' = 'INFO') {
   const time = new Date().toISOString();
   const logLine = `[${time}] [${level}] ${msg}`;
@@ -69,23 +73,27 @@ function pushLog(msg: string, level: 'INFO' | 'WARN' | 'ERROR' = 'INFO') {
     console.log(logLine);
   }
 }
+
 function logInfo(msg: string) { pushLog(msg, 'INFO'); }
 function logWarn(msg: string) { pushLog(msg, 'WARN'); }
 function logError(msg: string) { pushLog(msg, 'ERROR'); }
+
 function parseSize(sizeStr: string | number): number {
   if (typeof sizeStr === 'number') return sizeStr;
   const match = sizeStr.match(/^(\d+)(MB|KB|B)$/i);
-  if (!match) throw new Error('大小格式无效, 请使用“8MB”、“1024KB”或“1048576B”格式');
+  if (!match) throw new Error('大小格式无效, 请使用"8MB"、"1024KB"或"1048576B"格式');
   const [, size, unit] = match;
   const multipliers = { 'B': 1, 'KB': 1024, 'MB': 1024 * 1024 };
-  return parseInt(size) * multipliers[unit.toUpperCase()];
+  return parseInt(size) * multipliers[unit.toUpperCase() as keyof typeof multipliers];
 }
+
 function parseTime(timeStr: string | number): number {
   if (typeof timeStr === 'number') return timeStr;
   const match = timeStr.match(/^(\d+)S$/i);
-  if (!match) throw new Error('时间格式无效, 使用“86400S”等格式');
+  if (!match) throw new Error('时间格式无效, 使用"86400S"等格式');
   return parseInt(match[1]);
 }
+
 function formatSize(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB'];
   let size = bytes;
@@ -96,6 +104,14 @@ function formatSize(bytes: number): string {
   }
   return `${size.toFixed(2)}${units[unitIndex]}`;
 }
+
+function getClientIp(ctx: any): string {
+  return ctx.request.headers.get('x-forwarded-for')?.split(',')[0].trim() || 
+         ctx.request.headers.get('x-real-ip') || 
+         ctx.request.ip || '';
+}
+
+// ================== 缓存系统 ==================
 class MemoryCache {
   cache = new Map<string, any>();
   maxSize: number;
@@ -103,10 +119,13 @@ class MemoryCache {
   constructor(maxSize: string | number) {
     this.maxSize = parseSize(maxSize);
   }
+  
   set(key: string, value: any, size: number, maxAge?: string) {
     while (this.currentSize + size > this.maxSize && this.cache.size > 0) {
       const firstKey = this.cache.keys().next().value;
-      this.delete(firstKey);
+      if (firstKey) {
+        this.delete(firstKey);
+      }
     }
     if (size > this.maxSize) return false;
     const expiresAt = maxAge ? Date.now() + parseTime(maxAge) * 1000 : null;
@@ -114,6 +133,7 @@ class MemoryCache {
     this.currentSize += size;
     return true;
   }
+  
   get(key: string) {
     const item = this.cache.get(key);
     if (item) {
@@ -127,6 +147,7 @@ class MemoryCache {
     }
     return null;
   }
+  
   delete(key: string) {
     const item = this.cache.get(key);
     if (item) {
@@ -134,6 +155,7 @@ class MemoryCache {
       this.cache.delete(key);
     }
   }
+  
   has(key: string) {
     if (!this.cache.has(key)) return false;
     const item = this.cache.get(key);
@@ -143,49 +165,56 @@ class MemoryCache {
     }
     return true;
   }
+  
   getSize() { return this.currentSize; }
   clear() { this.cache.clear(); this.currentSize = 0; }
 }
+
 class Cache {
   config: any;
   cacheImpl: any;
   cacheConfig: any;
+  
   constructor(config: any) {
     this.config = config;
     const cacheType = config.cache?.type || 'memory';
     const maxSize = config.cache?.maxSize || '1024MB';
-    if (cacheType === 'disk') {
-      this.cacheImpl = new MemoryCache(maxSize);
-    } else {
-      this.cacheImpl = new MemoryCache(maxSize);
-    }
+    // Deno版本只实现内存缓存
+    this.cacheImpl = new MemoryCache(maxSize);
     this.cacheConfig = { type: cacheType, maxSize };
   }
+  
   getCacheConfig() { return this.cacheConfig; }
+  
   getCacheKey(path: string) { return path; }
+  
   isCacheable(ext: string, bufferLength: number) {
     const allowedTypes = this.config.cache?.imageTypes || ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"];
     const minSize = parseSize(this.config.cache?.minSize || "8MB");
     return allowedTypes.includes(ext) && bufferLength >= minSize;
   }
+  
   async get(path: string) {
     return this.cacheImpl.get(path);
   }
+  
   async set(path: string, buffer: Uint8Array, contentType: string) {
     const maxTime = this.config.cache?.maxTime;
     const cacheData = { data: buffer, contentType };
     this.cacheImpl.set(path, cacheData, buffer.length, maxTime);
   }
+  
   formatSize(bytes: number) { return formatSize(bytes); }
 }
+
 function getCacheHeaders(maxAgeSeconds: number) {
   return {
     "Cache-Control": `public, max-age=${maxAgeSeconds}`,
     "CDN-Cache-Control": `max-age=${maxAgeSeconds}`,
   };
 }
-// ================== 工具函数与缓存实现合并 END ==================
 
+// ================== 配置加载 ==================
 const fallbackConfig = {
   title: "MIFENG CDN代理服务",
   description: "高性能多源CDN代理解决方案",
@@ -193,198 +222,291 @@ const fallbackConfig = {
   proxies: []
 };
 
-const config = await loadConfig(CONFIG_FILE, fallbackConfig);
-logInfo("配置加载完成");
-const [homepage, configHtml, favicon] = await loadStatics({
-  index: INDEX_FILE,
-  configHtml: CONFIG_HTML_FILE,
-  favicon: FAVICON_PATH
-});
-logInfo("静态资源加载完成");
-const START_TIME = new Date();
-const maxAgeSeconds = config.cache?.maxTime ? parseTime(config.cache.maxTime) : 86400;
-const cacheHeaders = getCacheHeaders(maxAgeSeconds);
-const imageCache = new Cache(config);
-
+// 初始化应用
 const app = new Application();
 const router = new Router();
 
-// 基础路由
-router.get("/", (ctx) => {
-  if (!homepage) {
-    ctx.response.status = 503;
-    ctx.response.body = "Service Unavailable";
-    return;
-  }
-  ctx.response.headers.set("Content-Type", "text/html; charset=utf-8");
-  Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-  ctx.response.body = homepage;
-});
+// 主函数
+async function main() {
+  const config = await loadConfig(CONFIG_FILE, fallbackConfig);
+  logInfo("配置加载完成");
+  
+  const [homepage, favicon] = await loadStatics({
+    index: INDEX_FILE,
+    favicon: FAVICON_PATH
+  });
+  logInfo("静态资源加载完成");
+  
+  const START_TIME = new Date();
+  const maxAgeSeconds = config.cache?.maxTime ? parseTime(config.cache.maxTime) : 86400;
+  const cacheHeaders = getCacheHeaders(maxAgeSeconds);
+  const imageCache = new Cache(config);
 
-router.get("/favicon.ico", (ctx) => {
-  if (!favicon) {
-    ctx.response.status = 404;
-    ctx.response.body = "Not Found";
-    return;
-  }
-  ctx.response.headers.set("Content-Type", "image/x-icon");
-  Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-  ctx.response.body = favicon;
-});
-
-router.get(CONFIG_ENDPOINT, (ctx) => {
-  const uptime = calculateUptime(config.establishTime);
-  const establish = formatEstablishTime(config.establishTime);
-  const cacheDays = Math.floor(maxAgeSeconds / 86400);
-  const configInfo = {
-    服务状态: "运行中",
-    版本信息: "v1.0",
-    运行时间: uptime,
-    建站时间: establish,
-    缓存时间: `${cacheDays}天`,
-    服务配置: {
-      服务名称: config.title,
-      服务描述: config.description,
-      页脚信息: config.footer
-    },
-    代理服务器: config.httpProxy?.enabled ? {
-      启用状态: "已启用",
-      代理地址: `${config.httpProxy.address}${config.httpProxy.port ? ':' + config.httpProxy.port : ''}`,
-      认证信息: config.httpProxy.username ? "已配置" : "未配置"
-    } : {
-      启用状态: "未启用"
-    },
-    代理配置: (config.proxies || []).filter((proxy: any) => proxy.visible !== false).map((proxy: any) => ({
-      代理路径: proxy.prefix,
-      目标地址: proxy.target,
-      代理说明: proxy.description || "未提供描述",
-      重定向模板: proxy.rawRedirect || "使用默认目标URL",
-      使用代理: proxy.useProxy !== false ? "是" : "否",
-      使用示例: {
-        代理访问: `${ctx.request.url.origin}${proxy.prefix}`,
-        直接重定向: `${ctx.request.url.origin}${proxy.prefix}?raw=true`
-      }
-    }))
-  };
-  ctx.response.headers.set('Content-Type', 'application/json; charset=utf-8');
-  Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-  ctx.response.body = JSON.stringify(configInfo, null, 2);
-});
-
-router.get("/logs", (ctx) => {
-  ctx.response.headers.set('Content-Type', 'text/plain; charset=utf-8');
-  ctx.response.body = logBuffer.join('\n');
-});
-
-// ================== 代理核心逻辑合并 ==================
-async function denoProxyRoute(ctx: any, config: any, cacheHeaders: any, imageCache: any) {
-  const urlPath = ctx.request.url.pathname;
-  const query = ctx.request.url.searchParams;
-  const clientIp = ctx.request.ip || ctx.request.headers.get("x-forwarded-for") || ctx.request.headers.get("x-real-ip") || ctx.request.conn?.remoteAddr?.hostname || "unknown";
-  let proxyConfig: any = null;
-  let basePath = urlPath;
-  for (const proxy of config.proxies) {
-    if (urlPath.startsWith(proxy.prefix)) {
-      proxyConfig = proxy;
-      basePath = urlPath.slice(proxy.prefix.length);
-      break;
-    }
-  }
-  if (!proxyConfig) {
-    logWarn(`[输出] 未匹配到代理，返回404`);
-    ctx.response.status = 404;
-    ctx.response.body = 'Not Found';
-    return;
-  }
-  // IP信息输出（无IP库则只输出IP）
-  logInfo(`[请求]————————————————————————`);
-  logInfo(`|- IP：${clientIp}`);
-  logInfo(`[请求] 路径: ${urlPath}, 方法: ${ctx.request.method}`);
-  const sanitizedPath = basePath.replace(/^\/+/, "").replace(/\|/g, "").replace(/[\/]+/g, "/");
-  const targetUrl = new URL(sanitizedPath, proxyConfig.target);
-  logInfo(`[代理] 目标URL: ${targetUrl}`);
-  if (query.get("raw") === "true") {
-    let redirectUrl = proxyConfig.rawRedirect ? proxyConfig.rawRedirect.replace("{path}", sanitizedPath) : targetUrl.toString();
-    query.delete("raw");
-    if ([...query].length > 0) {
-      redirectUrl += (redirectUrl.includes('?') ? '&' : '?') + query.toString();
-    }
-    logInfo(`[重定向] ${urlPath} => ${redirectUrl}`);
-    ctx.response.status = 302;
-    ctx.response.headers.set("Location", redirectUrl);
-    return;
-  }
-  // 缓存命中
-  const cached = await imageCache.get(urlPath);
-  if (cached) {
-    logInfo(`[缓存] 命中 ${urlPath} (${imageCache.formatSize(cached.data.length)})`);
-    ctx.response.status = 200;
-    ctx.response.headers.set("Content-Type", cached.contentType);
-    Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-    ctx.response.body = cached.data;
-    return;
-  }
-  // 代理下载
-  try {
-    const useProxy = proxyConfig.useProxy !== false && config.httpProxy?.enabled;
-    const proxySettings = useProxy ? config.httpProxy : null;
-    const fetchOptions: any = { method: "GET" };
-    if (proxySettings) {
-      logInfo(`[代理设置] 代理: ${proxySettings.address}:${proxySettings.port}`);
-    }
-    logInfo(`[代理] 开始下载: ${targetUrl}`);
-    const resp = await fetch(targetUrl.toString(), fetchOptions);
-    if (!resp.ok) {
-      logError(`[错误] 下载失败: ${targetUrl} 状态: ${resp.status}`);
-      ctx.response.status = resp.status;
-      ctx.response.body = 'Upstream Error';
+  // ================== 基础路由 ==================
+  router.get("/", (ctx) => {
+    if (!homepage) {
+      ctx.response.status = 503;
+      ctx.response.body = "Service Unavailable";
       return;
     }
-    const buffer = new Uint8Array(await resp.arrayBuffer());
-    const ext = urlPath.split('.').pop()?.toLowerCase() || '';
-    if (config.cache?.enabled && imageCache.isCacheable(ext, buffer.length)) {
-      logInfo(`[缓存] 存储 ${urlPath} (${imageCache.formatSize(buffer.length)})`);
-      await imageCache.set(urlPath, buffer, resp.headers.get("content-type") || "application/octet-stream");
-    }
-    logInfo(`[完成] ${urlPath} 下载完成 (${imageCache.formatSize(buffer.length)})`);
-    ctx.response.status = 200;
-    ctx.response.headers.set("Content-Type", resp.headers.get("content-type") || "application/octet-stream");
+    ctx.response.headers.set("Content-Type", "text/html; charset=utf-8");
     Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-    ctx.response.body = buffer;
-  } catch (e) {
-    logError(`[错误] 代理请求失败: ${e.message}`);
-    ctx.response.status = 500;
-    ctx.response.body = 'Internal Error';
-  }
-}
-// ================== 代理核心逻辑合并 END ==================
+    ctx.response.body = homepage;
+  });
 
-// 动态注册所有代理前缀路由，优先于静态资源
-for (const proxy of config.proxies || []) {
-  if (proxy.prefix && proxy.target) {
-    router.get(`${proxy.prefix}:path*`, async (ctx) => {
-      await denoProxyRoute(ctx, config, cacheHeaders, imageCache);
-    });
-  }
-}
+  router.get("/favicon.ico", (ctx) => {
+    if (!favicon) {
+      ctx.response.status = 404;
+      ctx.response.body = "Not Found";
+      return;
+    }
+    ctx.response.headers.set("Content-Type", "image/x-icon");
+    Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+    ctx.response.body = favicon;
+  });
 
-router.get("/proxy/:path+", async (ctx) => {
-  await denoProxyRoute(ctx, config, cacheHeaders, imageCache);
-});
+  router.get("/logs", (ctx) => {
+    ctx.response.headers.set("Content-Type", "text/plain; charset=utf-8");
+    ctx.response.body = logBuffer.join('\n');
+  });
 
-app.use(router.routes());
-app.use(router.allowedMethods());
+  router.get(CONFIG_ENDPOINT, (ctx) => {
+    const uptime = calculateUptime(config.establishTime);
+    const establish = formatEstablishTime(config.establishTime);
+    const cacheDays = Math.floor(maxAgeSeconds / 86400);
+    const host = ctx.request.url.host;
+    const protocol = ctx.request.secure ? 'https' : 'http';
+    
+    const configInfo = {
+      服务状态: "运行中",
+      版本信息: "v1.0",
+      运行时间: uptime,
+      建站时间: establish,
+      缓存时间: `${cacheDays}天`,
+      服务配置: {
+        服务名称: config.title,
+        服务描述: config.description,
+        页脚信息: config.footer
+      },
+      代理服务器: config.httpProxy?.enabled ? {
+        启用状态: "已启用",
+        代理地址: `${config.httpProxy.address}${config.httpProxy.port ? ':' + config.httpProxy.port : ''}`,
+        认证信息: config.httpProxy.username ? "已配置" : "未配置"
+      } : {
+        启用状态: "未启用"
+      },
+      代理配置: config.proxies
+        .filter((proxy: any) => proxy.visible !== false)
+        .map((proxy: any) => ({
+          代理路径: proxy.prefix,
+          目标地址: proxy.target,
+          代理说明: proxy.description || "未提供描述",
+          重定向模板: proxy.rawRedirect || "使用默认目标URL",
+          使用代理: proxy.useProxy !== false ? "是" : "否",
+          使用示例: {
+            代理访问: `${protocol}://${host}${proxy.prefix}`,
+            直接重定向: `${protocol}://${host}${proxy.prefix}?raw=true`
+          }
+        }))
+    };
+    
+    ctx.response.headers.set("Content-Type", "application/json; charset=utf-8");
+    Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+    ctx.response.body = JSON.stringify(configInfo, null, 2);
+  });
 
-// 静态资源兜底
-app.use(async (ctx, next) => {
-  try {
-    await send(ctx, ctx.request.url.pathname, { root: PUBLIC_DIR });
-  } catch {
+  // ================== 代理路由 ==================
+  router.all("/(.*)", async (ctx) => {
+    try {
+      const path = ctx.request.url.pathname;
+      const ip = getClientIp(ctx);
+      
+      logInfo(`[请求] 路径: ${path}, 方法: ${ctx.request.method}`);
+      
+      let proxyConfig = null;
+      let basePath = path;
+      for (const proxy of config.proxies) {
+        if (path.startsWith(proxy.prefix)) {
+          proxyConfig = proxy;
+          basePath = path.slice(proxy.prefix.length);
+          break;
+        }
+      }
+      
+      if (!proxyConfig) {
+        logInfo(`[输出] 未匹配到代理，返回404`);
+        ctx.response.status = 404;
+        ctx.response.body = 'Not Found';
+        return;
+      }
+      
+      const sanitizedPath = basePath.replace(/^[\/]+/, "").replace(/\|/g, "").replace(/[\/]+/g, "/");
+      const targetUrl = new URL(sanitizedPath, proxyConfig.target);
+      
+      // 处理URL参数
+      const searchParams = ctx.request.url.searchParams;
+      for (const [key, value] of searchParams.entries()) {
+        if (key !== "raw") {
+          targetUrl.searchParams.append(key, value);
+        }
+      }
+      
+      logInfo(`[代理] 目标URL: ${targetUrl}`);
+      
+      if (searchParams.get("raw") === "true") {
+        let redirectUrl;
+        if (proxyConfig.rawRedirect) {
+          redirectUrl = proxyConfig.rawRedirect.replace("{path}", sanitizedPath);
+          
+          const params = new URLSearchParams();
+          for (const [key, value] of searchParams.entries()) {
+            if (key !== "raw") params.append(key, value);
+          }
+          
+          if (params.toString()) {
+            redirectUrl += (redirectUrl.includes('?') ? '&' : '?') + params.toString();
+          }
+        } else {
+          redirectUrl = targetUrl.toString();
+        }
+        
+        ctx.response.redirect(redirectUrl);
+        return;
+      } else {
+        const cacheKey = path;
+        const cachedImage = await imageCache.get(cacheKey);
+        
+        if (cachedImage) {
+          logInfo(`[缓存] 命中 ${path} (${imageCache.formatSize(cachedImage.data.length)})`);
+          ctx.response.headers.set("Content-Type", cachedImage.contentType);
+          Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+          ctx.response.body = cachedImage.data;
+          return;
+        }
+        
+        logInfo(`[代理] 开始下载: ${targetUrl}`);
+        const useProxy = proxyConfig.useProxy !== false && config.httpProxy?.enabled;
+        
+        try {
+          const fetchOptions: any = {
+            method: ctx.request.method,
+            headers: {}
+          };
+          
+          const response = await fetch(targetUrl.toString(), fetchOptions);
+          
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          
+          const contentType = response.headers.get("Content-Type") || "application/octet-stream";
+          const buffer = new Uint8Array(await response.arrayBuffer());
+          const ext = path.split('.').pop()?.toLowerCase() || '';
+          
+          if (config.cache?.enabled && imageCache.isCacheable(ext, buffer.length)) {
+            logInfo(`[缓存] 存储 ${path} (${imageCache.formatSize(buffer.length)})`);
+            await imageCache.set(cacheKey, buffer, contentType);
+          }
+          
+          ctx.response.headers.set("Content-Type", contentType);
+          Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+          ctx.response.body = buffer;
+          
+        } catch (error: unknown) {
+          logError(`[错误] 下载失败: ${error instanceof Error ? error.message : String(error)}`);
+          ctx.response.status = 500;
+          ctx.response.body = 'Internal Server Error';
+        }
+      }
+    } catch (error: unknown) {
+      logError(`[错误] 代理请求失败: ${error instanceof Error ? error.message : String(error)}`);
+      ctx.response.status = 500;
+      ctx.response.body = 'Internal Server Error';
+    }
+  });
+
+  app.use(async (ctx, next) => {
+    const path = ctx.request.url.pathname;
+    
+    if (path === "/") {
+      if (!homepage) {
+        ctx.response.status = 503;
+        ctx.response.body = "Service Unavailable";
+        return;
+      }
+      ctx.response.headers.set("Content-Type", "text/html; charset=utf-8");
+      Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+      ctx.response.body = homepage;
+      return;
+    }
+
+    if (path === "/favicon.ico") {
+      if (!favicon) {
+        ctx.response.status = 404;
+        ctx.response.body = "Not Found";
+        return;
+      }
+      ctx.response.headers.set("Content-Type", "image/x-icon");
+      Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
+      ctx.response.body = favicon;
+      return;
+    }
+    
+    if (path.startsWith("/assets/")) {
+      try {
+        await send(ctx, path, {
+          root: PUBLIC_DIR,
+        });
+        return;
+      } catch (err) {
+        await next();
+      }
+    }
+    
     await next();
+  });
+  
+  app.use(router.routes());
+  app.use(router.allowedMethods());
+  
+  const PORT = config.port || 3000;
+  const host = config.host || 'localhost';
+  
+  logInfo('================= MIFENG CDN代理服务 启动信息 =================');
+  logInfo(`服务名称: ${config.title}`);
+  logInfo(`服务描述: ${config.description}`);
+  logInfo(`页脚信息: ${config.footer}`);
+  logInfo(`监听地址: http://${host}:${PORT}`);
+  logInfo(`缓存类型: ${imageCache.cacheConfig.type === 'disk' ? '硬盘缓存' : '内存缓存'}`);
+  logInfo(`缓存启用: ${config.cache?.enabled !== false ? '是' : '否'}`);
+  logInfo(`最小缓存大小: ${config.cache?.minSize || '5MB'}`);
+  logInfo(`最大缓存大小: ${imageCache.cacheConfig.maxSize}`);
+  logInfo(`缓存时间: ${Math.floor(maxAgeSeconds / 86400)}天`);
+  logInfo(`支持图片类型: ${(config.cache?.imageTypes || []).join(', ')}`);
+  logInfo(`全局代理: ${config.httpProxy?.enabled ? '启用' : '禁用'}`);
+  if (config.httpProxy?.enabled) {
+    const proxyAddress = config.httpProxy.address + (config.httpProxy.port ? `:${config.httpProxy.port}` : '');
+    logInfo(`代理地址: ${proxyAddress}`);
+    logInfo(`代理认证: ${config.httpProxy.username ? '已配置' : '未配置'}`);
   }
-});
+  logInfo('代理配置:');
+  (config.proxies || []).forEach((proxy: any) => {
+    logInfo(`  - 路径: ${proxy.prefix} 目标: ${proxy.target} 可见: ${proxy.visible !== false ? '是' : '否'} 使用代理: ${proxy.useProxy !== false ? '是' : '否'} 描述: ${proxy.description || '无'}`);
+  });
+  logInfo(`建站时间: ${formatEstablishTime(config.establishTime)}`);
+  logInfo(`已运行: ${calculateUptime(config.establishTime)}`);
+  logInfo('============================================================');
+  
+  return app.listen({ port: PORT });
+}
 
-const PORT = config.port || 3000;
-logInfo(`DenoProxy 服务启动于 http://localhost:${PORT}`);
-logInfo("日志输出：所有请求和代理信息会在终端（控制台）显示，同时 /logs 路由可查看历史日志缓冲。");
-await app.listen({ port: PORT });
+if (import.meta.main) {
+  try {
+    await main();
+  } catch (error) {
+    console.error('服务器启动失败:', error);
+    Deno.exit(1);
+  }
+}
+
+export { app };

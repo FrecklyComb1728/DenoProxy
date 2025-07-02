@@ -8,11 +8,10 @@
     "port": 3000,
     "cache": {
         "enabled": true,
-        "type": "disk",
+        "type": "memory",
         "minSize": "2MB",
         "maxTime": "2678400S",
         "maxSize": "1024MB",
-        "diskPath": ".cache",
         "imageTypes": ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "ico"]
     },
     "httpProxy": {
@@ -57,4 +56,4 @@
             "useProxy": true
         }
     ]
-}
+} 
