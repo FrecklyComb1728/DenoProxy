@@ -3,7 +3,7 @@ import { Application, Router, send } from "https://deno.land/x/oak/mod.ts";
 import { join, dirname, fromFileUrl } from "https://deno.land/std@0.224.0/path/mod.ts";
 
 const __dirname = dirname(fromFileUrl(import.meta.url));
-const CONFIG_FILE = join(__dirname, "../NodeProxy/index_config.json");
+const CONFIG_FILE = join(__dirname, "index_config.json");
 const PUBLIC_DIR = join(__dirname, "public");
 const CONFIG_HTML_FILE = join(PUBLIC_DIR, "list.html");
 const INDEX_FILE = join(PUBLIC_DIR, "index.html");
