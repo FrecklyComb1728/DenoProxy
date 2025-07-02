@@ -325,11 +325,28 @@ async function main() {
       
       let proxyConfig = null;
       let basePath = path;
+      let matchedPath = '';
+
       for (const proxy of config.proxies) {
         if (path.startsWith(proxy.prefix)) {
           proxyConfig = proxy;
+          matchedPath = proxy.prefix;
           basePath = path.slice(proxy.prefix.length);
+          logInfo(`[代理] 通过主路径匹配: ${proxy.prefix}`);
           break;
+        }
+
+        if (proxy.aliases && Array.isArray(proxy.aliases)) {
+          for (const alias of proxy.aliases) {
+            if (path.startsWith(alias)) {
+              proxyConfig = proxy;
+              matchedPath = alias;
+              basePath = path.slice(alias.length);
+              logInfo(`[代理] 通过别名匹配: ${alias} -> ${proxy.prefix}`);
+              break;
+            }
+          }
+          if (proxyConfig) break;
         }
       }
       
@@ -343,7 +360,6 @@ async function main() {
       const sanitizedPath = basePath.replace(/^[\/]+/, "").replace(/\|/g, "").replace(/[\/]+/g, "/");
       const targetUrl = new URL(sanitizedPath, proxyConfig.target);
       
-      // 处理URL参数
       const searchParams = ctx.request.url.searchParams;
       for (const [key, value] of searchParams.entries()) {
         if (key !== "raw") {
