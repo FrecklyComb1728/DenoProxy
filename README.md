@@ -1,6 +1,6 @@
-# Deno CDN 代理服务
+# DenoProxy 代理服务
 
-这是一个使用Deno + Oak框架开发的高性能多源CDN代理解决方案。本项目是[NodeProxy](https://github.com/FrecklyComb1728/NodeProxy)的Deno版本实现，保留了原项目的核心功能。
+[NodeProxy](https://github.com/FrecklyComb1728/NodeProxy)的Deno版本实现，保留了原项目的核心功能。
 
 ## 功能特点
 
