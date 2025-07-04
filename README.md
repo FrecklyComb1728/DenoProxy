@@ -38,7 +38,7 @@ deno task start
     "footer": "页脚信息",
     "establishTime": "建站时间",
     "host": "监听主机",
-    "port": 端口号,
+    "port": "端口号",
     "cache": {
         "enabled": true,
         "type": "memory",
