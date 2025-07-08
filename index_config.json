@@ -5,10 +5,17 @@
     "establishTime": "2025/01/13/08/00",
     "forceInlineImages": true,
     "host": "localhost",
-    "port": 3000,
+    "port": 38633,
+    "dns": {
+        "enabled": false,
+        "servers": ["223.5.5.5", "114.114.114.114"],
+        "timeout": 5000,
+        "cacheEnabled": true,
+        "cacheTTL": 3600
+    },
     "cache": {
         "enabled": true,
-        "type": "memory",
+        "type": "disk",
         "minSize": "2MB",
         "maxTime": "2678400S",
         "maxSize": "1024MB",
@@ -27,7 +34,7 @@
         {
             "prefix": "/imlazy/",
             "aliases": ["/cdn.imlazy.ink:233/img/background/", "/https://cdn.imlazy.ink:233/img/background/"],
-            "target": "https://cdn.imlazy.ink:233/img/background/",
+            "target": "https://s7.imlazy.ink:233/img/background/",
             "rawRedirect": "https://cdn.imlazy.ink:233/img/background/{path}",
             "description": "个人图床服务(非本人图床，仅作反代并缓存)",
             "visible": false,
@@ -43,15 +50,14 @@
         },
         {
             "prefix": "/oss/",
-            "target": "https://cdn.statically.io/gh/FrecklyComb1728/image-oss@master/image/",
-            "rawRedirect": "https://cdn.jsdmirror.cn/gh/FrecklyComb1728/image-oss@master/{path}",
+            "target": "https://qh.oss.bee-zh.cn:50443/oss/",
             "description": "自建OSS",
             "visible": true,
             "useProxy": true
         },
         {
             "prefix": "/socialify/",
-            "aliases": ["/socialify.git.ci/", "/https://socialify.git.ci/"],
+            "aliases": ["socialify.git.ci/", "https://socialify.git.ci/"],
             "target": "https://socialify.git.ci/",
             "rawRedirect": "https://socialify.git.ci/{path}",
             "description": "socialify.git.ci 反代",
