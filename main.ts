@@ -409,6 +409,12 @@ async function main() {
             headers: {}
           };
           
+          // 添加代理支持
+          if (useProxy && config.httpProxy) {
+            // Deno中的代理配置需要通过环境变量或其他方式处理
+            // 这里保持简化实现
+          }
+          
           const response = await fetch(targetUrl.toString(), fetchOptions);
           
           if (!response.ok) {
@@ -416,17 +422,57 @@ async function main() {
           }
           
           const contentType = response.headers.get("Content-Type") || "application/octet-stream";
-          const buffer = new Uint8Array(await response.arrayBuffer());
+          const contentLength = response.headers.get("Content-Length");
           const ext = path.split('.').pop()?.toLowerCase() || '';
           
-          if (config.cache?.enabled && imageCache.isCacheable(ext, buffer.length)) {
-            logInfo(`[缓存] 存储 ${path} (${imageCache.formatSize(buffer.length)})`);
-            await imageCache.set(cacheKey, buffer, contentType);
-          }
-          
+          // 设置响应头
           ctx.response.headers.set("Content-Type", contentType);
+          if (contentLength) {
+            ctx.response.headers.set("Content-Length", contentLength);
+          }
           Object.entries(cacheHeaders).forEach(([k, v]) => ctx.response.headers.set(k, v));
-          ctx.response.body = buffer;
+          
+          // 检查是否应该使用流式传输（大文件或未知大小）
+          const shouldStream = !contentLength || parseInt(contentLength) > 2 * 1024 * 1024; // 2MB阈值
+          
+          if (shouldStream && response.body) {
+            // 流式传输
+            logInfo(`[流式] 开始流式传输: ${path}`);
+            
+            // 创建可读流
+            const readable = new ReadableStream({
+              start(controller) {
+                const reader = response.body!.getReader();
+                
+                function pump(): Promise<void> {
+                  return reader.read().then(({ done, value }) => {
+                    if (done) {
+                      controller.close();
+                      return;
+                    }
+                    controller.enqueue(value);
+                    return pump();
+                  }).catch(err => {
+                    controller.error(err);
+                  });
+                }
+                
+                return pump();
+              }
+            });
+            
+            ctx.response.body = readable;
+          } else {
+            // 小文件直接加载到内存
+            const buffer = new Uint8Array(await response.arrayBuffer());
+            
+            if (config.cache?.enabled && imageCache.isCacheable(ext, buffer.length)) {
+              logInfo(`[缓存] 存储 ${path} (${imageCache.formatSize(buffer.length)})`);
+              await imageCache.set(cacheKey, buffer, contentType);
+            }
+            
+            ctx.response.body = buffer;
+          }
           
         } catch (error: unknown) {
           logError(`[错误] 下载失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -499,6 +545,8 @@ async function main() {
   logInfo(`最大缓存大小: ${imageCache.cacheConfig.maxSize}`);
   logInfo(`缓存时间: ${Math.floor(maxAgeSeconds / 86400)}天`);
   logInfo(`支持图片类型: ${(config.cache?.imageTypes || []).join(', ')}`);
+  logInfo(`流式传输: 启用`);
+  logInfo(`DNS解析: 禁用`);
   logInfo(`全局代理: ${config.httpProxy?.enabled ? '启用' : '禁用'}`);
   if (config.httpProxy?.enabled) {
     const proxyAddress = config.httpProxy.address + (config.httpProxy.port ? `:${config.httpProxy.port}` : '');
